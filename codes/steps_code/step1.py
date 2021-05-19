@@ -438,17 +438,17 @@ chirp_mass_vec = np.zeros([gal_no])
 f_min = 1e-9 #
 
 # ## Create multiple gravitational-wave sky realizations from the catalog.
-real_tot = 100 # number of realizations
+real_tot = 250 # number of realizations
 tot_gal_counter = np.zeros([real_tot]) # keeps track of the total number of galaxies for each realization (loop)
 
 # multiple realizations of the Universe
 
 #files/destination that entire data set will be written to
-result_file = open("../../test_data/test_gas" + str(arg_number) + ".txt", "a+") # the a+ allows you to create the file and write to it.
-stall_file = open("../../test_data/stalled_gas"+ str(arg_number) +".txt", "a+") #will collect data for the stalled binaries
+result_file = open("../../test_data/sources/sources_gas" + str(arg_number) + ".txt", "a+") # the a+ allows you to create the file and write to it.
+stall_file = open("../../test_data/stalled/stalled_gas"+ str(arg_number) +".txt", "a+") #will collect data for the stalled binaries
 
 #creating the realizations
-for j in range(arg_number,arg_number+real_tot):
+for j in range(real_tot):
     # array which holds the probablity of each binary being in PTA band and outputs from prob calcs.
     p_i_vec = np.zeros([gal_no])
 
@@ -619,7 +619,7 @@ for j in range(arg_number,arg_number+real_tot):
 
     # Save realization
     # 1.save realization number and starting index of data
-    result_file.write('Realization Number ' + str(j) + '\n')
+    result_file.write('#Realization Number ' + str(j) + '\n')
 
     # 2.save the actual realization data
 #     for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RE, FRI, HAR in zip(RA_tot, DEC_tot, gw_freq_vec, strain_vec, mchirp_rec,q_rec, gal_cat_name, dist_list, mstar_list, save_p, gal_choice, T_z_list, mergRate_list, t2c_list, z_list, r_inf_list, friction_list, hardening_list):
@@ -631,7 +631,7 @@ for j in range(arg_number,arg_number+real_tot):
 
     #repeat for stalled data
     
-    stall_file.write('Realization Number ' + str(j) + '\n')
+    stall_file.write('#Realization Number ' + str(j) + '\n')
 
     
 #     for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RE, FRI, HAR, TOT, BUL in zip(RA_tot_stalled, DEC_tot_stalled, \
