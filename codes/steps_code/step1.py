@@ -116,6 +116,70 @@ def time_to_c_wMc(chirp_mass, freq):
     ans = (pi*freq)**(-8/3)*(chirp_mass*s_mass)**(-5/3)*5/256
     return (ans/31556926)
 
+def g(n,e):
+    """
+    From eqn.(3) in Huerta et al.(2015).
+    """
+    return (n**4)/(32)*(jv(n,n*e)**2/n**2*(2-4/e**2)**2 +\
+                     jvp(n,n*e)**2*(4/e - 4*e)**2 +\
+                     2*jv(n,n*e)*jvp(n,n*e)/n *(2-4/e**2)*(4/e-4*e)+\
+                     jv(n,n*e)**2*(1-e**2)*(4/e**2 - 4)**2 +\
+                     jvp(n,n*e)**2/n**2 * (1-e**2)*(4/e)**2 -\
+                     2*jv(n,n*e)*jvp(n,n*e)/n*4*(1-e**2)/e*(4/e**2-4) +\
+                     4*jv(n,n*e)**2/3/n**2)
+
+def nq_ecc(e,q=0.95):
+    """
+    Finding the quantile(q) of the g(n,e)
+    function as a measure of the extreme harmonic that
+    significantly contributes.
+    """
+    n = np.arange(1,200)
+    g_func = np.vectorize(g)(n,e)
+    probs = g_func/sum(g_func)
+    cdf = np.cumsum(probs)
+    q_idx = np.where(cdf<=q)[0][-1]
+    return np.maximum(n[q_idx],2)
+
+def ecc_integral(e):
+    """
+    Integrand of the time to coalescence calculation from
+    eqn.(5.14) in Peters 1964.
+    """
+    return e**(29/19)*(1+(121./304)*e**2)**(1181/2299)/(1-e**2)**1.5
+
+def find_a_e(e_0,a_starGW_ecc,q,Mtot,nq_interp,min_freq): # PTA cutoff at 1nHz
+    """
+    Finding the orbital separation and eccentricity when the 95th
+    percentile of the harmonic distribution, given by g(n,e),
+    matches the PTA cut-off min_freq. Uses a pre-computed
+    interpolating function that provides the quantile(q).
+    Answers in seconds.
+    """
+    c0 = a_starGW_ecc*(1-e_0**2)/e_0**(12/19)/(1+121./304*e_0**2)**(870/2299)
+    e_arr = np.logspace(-3,np.log10(e_0),10000)
+    a_arr = c0/(1-e_arr**2)*e_arr**(12/19)*(1+121./304*e_arr**2)**(870/2299)
+    orb_freq_arr = (Mtot*s_mass/a_arr**3)**0.5/(2*np.pi)
+    nq_arr = nq_interp(e_arr)
+    gw_freq = nq_arr*orb_freq_arr
+    e_1 = e_arr[np.log10(gw_freq)>=-9][-1]
+    a_1 = a_arr[np.log10(gw_freq)>=-9][-1]
+    return a_1,e_1
+
+def time_to_c_ecc(e_0,a_hard_ecc,q,Mtot,nq_interp,min_freq):
+    """
+    time to coalescence for the eccentric case, from Peters (1964)
+    eqns. 5.11, 5.14. This is done via numerical integration and
+    needs initial conditions (a0,e_0). Answer in years.
+    """
+    a_1,e_1 = find_a_e(e_0,a_hard_ecc,q,Mtot,nq_interp,min_freq)
+    c1 = a_1*(1-e_1**2)/e_1**(12/19)/(1+121./304*e_1**2)**(870/2299)
+    m1 = Mtot*s_mass/(1+q)
+    m2 = q*m1
+    beta = 64/5*m1*m2*Mtot*s_mass
+    ans = 12/19*(c1**4/beta)*quad(ecc_integral,0,e1)[0]
+    return ans/31556926
+
 def i_prob(q, Mtot, min_freq, total_T):
     """
     input time in years, Mtot in solar masses
@@ -229,9 +293,36 @@ def t_hard(Mstar,q,gamma,Mtot):
     ans = sigma_inf/(H*rho_inf*aStarGW)
     return ans/31536000/1e9, rinf_val
 
+def a_StarGW_ecc(Mstar,q,Mtot,gamma,H,e):
+    """
+    Eq. 6, Sesana & Khan 2015.
+    Answer in seconds
+    """
+    sigmaInf = sigmaVel(Mstar)*1000/c # km/s converted to m/s then /c for dimensionless units
+    rho_inf = rho_r(Mstar, gamma, r_inf(Mstar,gamma,Mtot)) #rinf in pc, rho_inf func converts
+    F_e = (1-e**2)**(-7./2)*(1+(73./24)*e**2 + (37./96)*e**4)
+    num = 64*sigmaInf*(q*(Mtot*s_mass)**3/(1+q)**2*F_e)
+    deno = 5*H*rho_inf
+    ans = (num/deno)**(1/5)
+    return ans
+
+def t_hard_ecc(Mstar,q,gamma,Mtot,e):
+    """
+    Hardening timescale with stars, Eq. 7 Sesana & Khan 2015
+    Answer in Gyrs
+    """
+    a_val = parsec2sec(r0_sol(Mstar, gamma))
+    H = 15
+    aStarGW_ecc = a_StarGW_ecc(Mstar,q,Mtot,gamma,H,e) #check units
+    sigma_inf = sigmaVel(Mstar)*1000/c
+    rinf_val = r_inf(Mstar,gamma,Mtot)
+    rho_inf = rho_r(Mstar, gamma, rinf_val)
+    ans = sigma_inf/(H*rho_inf*aStarGW_ecc)
+    return ans/31536000/1e9, rinf_val
+
 def a_SHGas(Mstar, gamma, Mtot):
     """
-    Based on Tiede et al(2020) at Mach number=30 and 
+    Based on Tiede et al(2020) at Mach number=30 and
     equating da/dt for gas and SH.
     Answer in seconds.
     """
@@ -348,6 +439,36 @@ def i_prob_Illustris(Mstar, Mtot, q, min_freq):
         ans = t2c*mergRate/1e9
         return ans, z, Tz, mergRate, t2c, r_inf_here, friction_t, hardening_t
 
+def i_prob_Illustris_ecc(Mstar, Mtot, q, e_0, nq_interp, min_freq):
+    """
+    Probability that this galaxy contains a binary in the PTA band
+    """
+    chirpMass = mchirp_q(q,Mtot)/s_mass #in solar mass units
+    M1 = Mtot/(1+q)
+    M2 = M1*q
+    mu_min, mu_max = 0.25, 1.0
+    gamma = 1.0 # for Hernquist profile, see Dehen 1993
+    H = 15
+
+    #Mstar = Mstar*MzMnow(mu, sigma) # scale M* according to Figure 7 of de Lucia and Blaizot 2007
+    MstarZ = 0.7*Mstar
+    hardening_t, r_inf_here = t_hard_ecc(MstarZ,q,gamma,Mtot,e_0)
+    friction_t = tfric(MstarZ,M2)
+    timescale = hardening_t + friction_t  # Gyrs
+
+    # if timescale > 12.25 Gyrs (z=4), no merging SMBHs
+    # also limit of validity for Rodriguez-Gomez + (2015) fit in Table 1.
+    if timescale > 12.25:
+        return 0, 'nan', timescale*1e9, 'nan', 'nan',  r_inf_here, friction_t, hardening_t
+    else:
+        z = z_at_value(Planck15.age, (13.79-timescale) * u.Gyr) # redshift of progenitor galaxies
+        a_hard_ecc = a_StarGW_ecc(MstarZ,q,Mtot,gamma,H,e_0)
+        t2c = time_to_c_ecc(e_0,a_hard_ecc,q,Mtot,nq_interp,min_freq) # in years
+        mergRate = cumulative_merg_ill(mu_min, mu_max, MstarZ, z) # rate per Gigayear
+        Tz = timescale*1e9
+        ans = t2c*mergRate/1e9
+        return ans, z, Tz, mergRate, t2c, r_inf_here, friction_t, hardening_t
+
 def i_prob_Illustris_gasM30(Mstar, Mtot, q, min_freq):
     """
     Probability that this galaxy contains a binary in the PTA band
@@ -380,8 +501,8 @@ def i_prob_Illustris_gasM30(Mstar, Mtot, q, min_freq):
         Tz = timescale*1e9
         ans = t2c*mergRate/1e9
         return ans, z, Tz, mergRate, t2c, friction_t, t_sh_gas, t_gas_GW
-    
-    
+
+
 # # Main Part of Code
 
 # ### Choose a galaxy catalog
@@ -437,6 +558,11 @@ chirp_mass_vec = np.zeros([gal_no])
 # minimum PTA frequency
 f_min = 1e-9 #
 
+# create interpolation function for eccentricity 95th percentile harmonic.
+e_arr = np.linspace(0.001,0.95,200)
+n95_arr = np.array(list(map(lambda e: nq_ecc(e),e_arr)))
+n95_interp = interp1d(e_arr,n95_arr)
+
 # ## Create multiple gravitational-wave sky realizations from the catalog.
 real_tot = 250 # number of realizations
 tot_gal_counter = np.zeros([real_tot]) # keeps track of the total number of galaxies for each realization (loop)
@@ -466,6 +592,7 @@ for j in range(real_tot):
     # initialize mass arrays
     chirp_mass_vec = np.zeros([gal_no])
     q_choice = np.zeros([gal_no])
+    e0_choice = np.random.choice(np.linspace(0.1,0.9,9))
 
     m_bulge = Mk2mStar(k_mag) # inferred M* mass from k-band luminosity, Cappellari (2013)
     tot_mass = Mbh2Mbulge(m_bulge) # M-Mbulge McConnell & Ma
@@ -491,8 +618,9 @@ for j in range(real_tot):
      # prob of binary being in PTA band
     for zz in range(gal_no):
 #        p_i_vec[zz], z_loop[zz], T_zLoop[zz], mergRate_loop[zz], t2c_loop[zz],  r_inf_loop[zz], friction_t_loop[zz], hardening_t_loop[zz] = i_prob_Illustris(m_bulge[zz], tot_mass[zz], q_choice[zz], f_min)
-        p_i_vec[zz], z_loop[zz], T_zLoop[zz], mergRate_loop[zz], t2c_loop[zz], friction_t_loop[zz], t_sh_gas_loop[zz], t_gas_GW_loop[zz] = i_prob_Illustris_gasM30(m_bulge[zz], tot_mass[zz], q_choice[zz], f_min)
-            
+        p_i_vec[zz], z_loop[zz], T_zLoop[zz], mergRate_loop[zz], t2c_loop[zz], r_inf_loop[zz], friction_t_loop[zz], hardening_t_loop[zz] = i_prob_Illustris_ecc(m_bulge[zz], tot_mass[zz], q_choice[zz], e0_choice, n95_interp,f_min)
+#        p_i_vec[zz], z_loop[zz], T_zLoop[zz], mergRate_loop[zz], t2c_loop[zz], friction_t_loop[zz], t_sh_gas_loop[zz], t_gas_GW_loop[zz] = i_prob_Illustris_gasM30(m_bulge[zz], tot_mass[zz], q_choice[zz], f_min)
+
     # number of stalled binaries
 
 
@@ -510,8 +638,8 @@ for j in range(real_tot):
     #number of stalled binaries and their indexs
     num_stalled = (p_i_vec == 0).sum()
     prob_of_each_gal_stalled = p_i_vec/num_stalled
-    gal_choice_stalled = [gal for gal in range(gal_no) if p_i_vec[gal] == 0] 
-    
+    gal_choice_stalled = [gal for gal in range(gal_no) if p_i_vec[gal] == 0]
+
 
     #inistiate all variables
     save_p = []
@@ -519,24 +647,24 @@ for j in range(real_tot):
     T_z_list = []
     mergRate_list=[]
     t2c_list = []
-#     r_inf_list = []
+    r_inf_list = []
     friction_list = []
-#     hardening_list = []
-    t_sh_gas_list = []
-    t_gas_GW_list = []
+    hardening_list = []
+#    t_sh_gas_list = []
+#    t_gas_GW_list = []
 
     save_p_stalled = []
     z_list_stalled = []
     T_z_list_stalled = []
     mergRate_list_stalled=[]
     t2c_list_stalled = []
-#     r_inf_list_stalled = []
+    r_inf_list_stalled = []
     friction_list_stalled = []
-#     hardening_list_stalled = []
-    t_sh_gas_list_stalled = []
-    t_gas_GW_list_stalled = []
+    hardening_list_stalled = []
+#    t_sh_gas_list_stalled = []
+#    t_gas_GW_list_stalled = []
 
-    
+
     #collect data for all desires galaxies
     for pr in gal_choice:
         save_p.append(prob_of_each_gal[pr])
@@ -544,11 +672,11 @@ for j in range(real_tot):
         mergRate_list.append(mergRate_loop[pr])
         t2c_list.append(t2c_loop[pr])
         z_list.append(z_loop[pr])
-#         r_inf_list.append(r_inf_loop[pr])
+        r_inf_list.append(r_inf_loop[pr])
         friction_list.append(friction_t_loop[pr])
-#         hardening_list.append(hardening_t_loop[pr])
-        t_sh_gas_list.append(t_sh_gas_loop[pr])
-        t_gas_GW_list.append(t_gas_GW_loop[pr])
+        hardening_list.append(hardening_t_loop[pr])
+#        t_sh_gas_list.append(t_sh_gas_loop[pr])
+#        t_gas_GW_list.append(t_gas_GW_loop[pr])
 
     for ss in gal_choice_stalled:
         save_p_stalled.append(prob_of_each_gal[ss])
@@ -556,11 +684,11 @@ for j in range(real_tot):
         mergRate_list_stalled.append(mergRate_loop[ss])
         t2c_list_stalled.append(t2c_loop[ss])
         z_list_stalled.append(z_loop[ss])
-#         r_inf_list_stalled.append(r_inf_loop[ss])
+        r_inf_list_stalled.append(r_inf_loop[ss])
         friction_list_stalled.append(friction_t_loop[ss])
-#         hardening_list_stalled.append(hardening_t_loop[ss])
-        t_sh_gas_list_stalled.append(t_sh_gas_loop[ss])
-        t_gas_GW_list_stalled.append(t_gas_GW_loop[ss])
+        hardening_list_stalled.append(hardening_t_loop[ss])
+#        t_sh_gas_list_stalled.append(t_sh_gas_loop[ss])
+#        t_gas_GW_list_stalled.append(t_gas_GW_loop[ss])
 
 
     # compute strain vectors
@@ -573,6 +701,8 @@ for j in range(real_tot):
     mstar_list = []
     q_rec = []
     mchirp_rec = []
+    m_tot_list = []
+    m_bul_list = []
 
     strain_vec_stalled = np.empty([num_stalled])
     RA_tot_stalled = np.empty([num_stalled])
@@ -587,7 +717,7 @@ for j in range(real_tot):
     m_bul_list_stalled = []
 
 
-    #gets data for 
+    #gets data for
     for kkk in range(no_of_samples):
         #print "printing choice of galaxy index ", gal_choice[kkk]
         time2col = np.random.uniform(100,2.6e7) # uniform sampling in time to coalesecence, up to fmin,
@@ -600,7 +730,8 @@ for j in range(real_tot):
         mstar_list.append(k_mag[gal_choice[kkk]])
         q_rec.append(q_choice[gal_choice[kkk]])
         mchirp_rec.append(chirp_mass_vec[gal_choice[kkk]])
-
+        m_tot_list.append(tot_mass[gal_choice[kkk]])
+        m_bul_list.append(m_bulge[gal_choice[kkk]])
 
     for sss in range(num_stalled):
         #print "printing choice of galaxy index ", gal_choice[kkk]
@@ -624,25 +755,26 @@ for j in range(real_tot):
     # 2.save the actual realization data
 #     for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RE, FRI, HAR in zip(RA_tot, DEC_tot, gw_freq_vec, strain_vec, mchirp_rec,q_rec, gal_cat_name, dist_list, mstar_list, save_p, gal_choice, T_z_list, mergRate_list, t2c_list, z_list, r_inf_list, friction_list, hardening_list):
 #         result_file.write('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18}\n'.format(R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RE, FRI, HAR, num_zeros)
-    for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, FRI, TSG, TGG in zip(RA_tot, DEC_tot, gw_freq_vec, strain_vec, mchirp_rec,q_rec, gal_cat_name, dist_list, mstar_list, save_p, gal_choice, T_z_list, mergRate_list, t2c_list, z_list, friction_list, t_sh_gas_list, t_gas_GW_list):
-        result_file.write('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18}\n'.format(R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, FRI, TSG, TGG, num_zeros))
+    for R, D, F, S, C, Q, G, L, M, MT, MB, P, I, TZ, MR, T2C, Z, RINF, FRI, HAR in zip(RA_tot, DEC_tot, gw_freq_vec, strain_vec, mchirp_rec,q_rec, gal_cat_name, dist_list, mstar_list, m_tot_list, m_bul_list, save_p, gal_choice, T_z_list, mergRate_list, t2c_list, z_list, r_inf_list, friction_list, hardening_list):
+        result_file.write('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20} {21} {22}\n'.format(R, D, F, S, C, Q, G, L, M, MT, MB, P, I, TZ, MR, T2C, Z, RINF, FRI, HAR, e0_choice, no_of_samples, num_zeros))
+#    for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, FRI, TSG, TGG in zip(RA_tot, DEC_tot, gw_freq_vec, strain_vec, mchirp_rec,q_rec, gal_cat_name, dist_list, mstar_list, save_p, gal_choice, T_z_list, mergRate_list, t2c_list, z_list, friction_list, t_sh_gas_list, t_gas_GW_list):
+#        result_file.write('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18}\n'.format(R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, FRI, TSG, TGG, num_zeros))
 
 
 
     #repeat for stalled data
-    
+
     stall_file.write('#Realization Number ' + str(j) + '\n')
 
-    
+
 #     for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RE, FRI, HAR, TOT, BUL in zip(RA_tot_stalled, DEC_tot_stalled, \
 #             gw_freq_vec_stalled, strain_vec_stalled, mchirp_rec_stalled,q_rec_stalled, gal_cat_name_stalled, dist_list_stalled, mstar_list_stalled, save_p_stalled, \
 #             gal_choice_stalled, T_z_list_stalled, mergRate_list_stalled, t2c_list_stalled, z_list_stalled, r_inf_list_stalled, friction_list_stalled, hardening_list_stalled, m_tot_list_stalled, m_bul_list_stalled):
 #         stall_file.write('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20}\n'.format(R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RE, FRI, HAR, num_stalled,TOT, BUL))
-    for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, FRI, TSG, TGG, TOT, BUL in zip(RA_tot_stalled, DEC_tot_stalled, \
+    for R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RINF, FRI, HAR, TOT, BUL in zip(RA_tot_stalled, DEC_tot_stalled, \
             gw_freq_vec_stalled, strain_vec_stalled, mchirp_rec_stalled,q_rec_stalled, gal_cat_name_stalled, dist_list_stalled, mstar_list_stalled, save_p_stalled, \
-            gal_choice_stalled, T_z_list_stalled, mergRate_list_stalled, t2c_list_stalled, z_list_stalled, friction_list_stalled, t_sh_gas_list_stalled, t_gas_GW_list_stalled, m_tot_list_stalled, m_bul_list_stalled):
-        stall_file.write('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20}\n'.format(R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, FRI, TSG, TGG, num_stalled,TOT, BUL))
+            gal_choice_stalled, T_z_list_stalled, mergRate_list_stalled, t2c_list_stalled, z_list_stalled, r_inf_list_stalled, friction_list_stalled, hardening_list_stalled, m_tot_list_stalled, m_bul_list_stalled):
+        stall_file.write('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20}\n'.format(R, D, F, S, C, Q, G, L, M, P, I, TZ, MR, T2C, Z, RINF, FRI, HAR, num_stalled,TOT, BUL))
 
 result_file.close()
 stall_file.close()
-    
